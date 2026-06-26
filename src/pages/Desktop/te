@@ -1,0 +1,501 @@
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useLayoutEffect } from "react";
+import { motion, useDragControls, AnimatePresence } from "framer-motion";
+import { allApps, desktopAppRegistry, taskBarAppsRegistry } from "../../apps/appRegistry";
+import { AirplaneIcon, AirplaneTakeoffIcon, BluetoothConnectedIcon, BluetoothSlashIcon, CaretLeftIcon, CaretRightIcon, CornersOutIcon, GearIcon, MagnifyingGlassIcon, MicrophoneIcon, MinusIcon, PowerIcon, SpeakerHighIcon, StarFourIcon, WifiHighIcon, WifiSlashIcon, XIcon } from "@phosphor-icons/react";
+
+// --- Types ---
+export type AppInstanceRef = { id: string; instanceId: string; state?: string; zIndex?: number; icon?: any; name?: string; };
+export type AppManagerAPI = { openApp: (appId: string, source?: "desktop" | "taskbar") => void; createAppInstance: (appId: string) => void; closeInstance: (instanceId: string) => void; closeAllInstancesOfApp: (appId: string) => void; getRunningInstances: (appId: string) => AppInstanceRef[]; focusInstance?: (instanceId: string) => void; };
+export type BatteryStatus = { level: number; charging: boolean; };
+export interface AppDefinition { id: string; name: string; defaultSize: { width: number; height: number }; icon: any; component: React.ReactNode; windowOptions?: { hideTitleBar?: boolean; customControls?: boolean; }; }
+export interface AppInstance extends AppDefinition { instanceId: string; x: number; y: number; zIndex: number; state: 'opening' | 'open' | 'closing' | 'minimized' | 'maximized'; }
+export interface DesktopAppInstance extends AppInstance { preview?: string; }
+export type TaskbarHover = { appId: string; show: boolean; x: number; y: number; };
+export type MyApp = { id: string; name: string; icon: any; x: number; y: number; };
+export type SelectionBox = { x: number; y: number; width: number; height: number; };
+export type WindowProps = { app: DesktopAppInstance; onClose: (id: string) => void; onFocus: (id: string) => void; onMinimize: (id: string) => void; onMaximize: (id: string) => void; frameConstraints: any; children: React.ReactNode; };
+
+// --- Constants & Dimensions ---
+const GRID_SIZE_X = 80;
+const GRID_SIZE_Y = 100;
+const ICON_WIDTH = 70;
+const ICON_HEIGHT = 80;
+const ICON_PADDING_X = 10;
+const TOP_MARGIN = 10;
+const WINDOW_CASCADE_OFFSET = 30;
+
+// --- Mocks & Assets ---
+const PLACEHOLDER_ICON = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3C/svg%3E";
+const DEFAULT_PROFILE = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'%3E%3C/path%3E%3Ccircle cx='12' cy='7' r='4'%3E%3C/circle%3E%3C/svg%3E";
+const WALLPAPER = "https://images.unsplash.com/photo-1550684848-fac1c5b4e853?q=80&w=2070&auto=format&fit=crop";
+
+const SvgIcons = {
+    getClose: (c = 'currentColor') => <XIcon size={14} color={c} />,
+    getMinimize: (c = 'currentColor') => <MinusIcon size={14} color={c} />,
+    getMaximize: (c = 'currentColor') => <CornersOutIcon size={12} color={c} />,
+    getSearch: (c = 'currentColor') => <MagnifyingGlassIcon size={18} color={c} />,
+    getMic: (c = 'currentColor') => <MicrophoneIcon size={18} color={c} />,
+    getRight: (c = 'currentColor') => <CaretRightIcon size={18} color={c} />,
+    getLeft: (c = 'currentColor') => <CaretLeftIcon size={18} color={c} />,
+    getPowerOff: (c = 'currentColor') => <PowerIcon size={18} color={c} />,
+    getWifiAvailable: (c = 'currentColor') => <WifiHighIcon size={18} color={c} />,
+    getWifiUnavailable: (c = 'currentColor') => <WifiSlashIcon size={18} color={c} strokeDasharray="2 2" />,
+    getBluetoothOn: (c = 'currentColor') => <BluetoothConnectedIcon size={18} color={c} />,
+    getBluetoothOff: (c = 'currentColor') => <BluetoothSlashIcon size={18} color={c} strokeDasharray="2 2" />,
+    getAirplaneOn: (c = 'currentColor') => <AirplaneTakeoffIcon size={18} color={c} />,
+    getAirplaneOff: (c = 'currentColor') => <AirplaneIcon size={18} color={c} />,
+    getSettings: (c = 'currentColor') => <GearIcon size={18} color={c} />,
+};
+
+// --- Contexts ---
+const defaultApi: AppManagerAPI = { openApp: () => undefined, createAppInstance: () => undefined, closeInstance: () => undefined, closeAllInstancesOfApp: () => undefined, getRunningInstances: () => [], focusInstance: () => undefined };
+const AppManagerContext = createContext<AppManagerAPI>(defaultApi);
+export const useAppManager = () => useContext(AppManagerContext);
+export const AppManagerProvider: React.FC<{ value: AppManagerAPI; children: React.ReactNode }> = ({ value, children }) => <AppManagerContext.Provider value={value}>{children}</AppManagerContext.Provider>;
+
+// --- Helper Components ---
+const MockAppContent = ({ title }: { title: string }) => (
+    <div className="flex items-center justify-center h-full bg-white/90 text-black">
+        <h2 className="text-2xl font-bold">{title} Workspace</h2>
+    </div>
+);
+
+// --- Task Manager App ---
+const TaskManagerApp = () => {
+    const appManager = useAppManager();
+    // Force re-render periodically to fetch latest running instances
+    const [tick, setTick] = useState(0);
+    useEffect(() => {
+        const i = setInterval(() => setTick(t => t + 1), 1000);
+        return () => clearInterval(i);
+    }, []);
+
+    // Get all apps from registry and collect their running instances
+    const allInstances = Object.values(allApps).flatMap(app => appManager.getRunningInstances(app.id));
+
+    return (
+        <div className="p-4 bg-white/95 h-full text-black overflow-y-auto">
+            <h2 className="text-xl font-bold mb-4 flex items-center gap-2"><GearIcon size={20} /> Task Manager</h2>
+            <div className="flex justify-between text-sm text-gray-500 border-b pb-2 mb-2 px-2">
+                <span>Application Name</span>
+                <span>Actions</span>
+            </div>
+            {allInstances.length === 0 && <p className="text-gray-500 mt-4 px-2">No active tasks.</p>}
+            {allInstances.map((inst, i) => (
+                <div key={i} className="flex items-center justify-between p-2 border-b hover:bg-gray-100 rounded">
+                    <div className="flex items-center gap-3">
+                        <img src={inst.icon} alt={inst.name} className="w-6 h-6" />
+                        <div>
+                            <p className="font-semibold text-sm">{inst.name}</p>
+                            <p className="text-xs text-gray-500">ID: {inst.instanceId}</p>
+                        </div>
+                    </div>
+                    <button onClick={() => appManager.closeInstance(inst.instanceId)} className="bg-red-500 hover:bg-red-600 text-white px-3 py-1 rounded text-xs transition-colors">End Task</button>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+// --- Reusable UI Components ---
+
+const BatteryIcon: React.FC<BatteryStatus> = ({ level, charging }) => (
+    <div className="flex items-center gap-2 relative text-white text-xs">
+        {!charging && <div className="relative w-5 h-3 border border-white rounded-sm"><div className="absolute top-0 left-0 h-full bg-white" style={{ width: `${level}%` }}></div></div>}
+        {charging && (<div className="-mx-1 text-green-400"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2L3 14H12L11 22L21 10H12L13 2Z" /></svg></div>)}
+        <span>{Math.round(level)}%</span>
+    </div>
+);
+
+// High-Performance Memoized Window Component
+const Window = React.memo<WindowProps>(({ app, onClose, onFocus, onMinimize, onMaximize, frameConstraints, children }) => {
+    const [size, setSize] = useState({ width: app.defaultSize.width, height: app.defaultSize.height });
+    const [position, setPosition] = useState({ x: app.x, y: app.y });
+    const [lastClickTime, setLastClickTime] = useState(0);
+    const [previousState, setPreviousState] = useState({ size: { width: app.defaultSize.width, height: app.defaultSize.height }, position: { x: app.x, y: app.y } });
+    const dragControls = useDragControls();
+
+    useEffect(() => {
+        if (app.state === 'maximized') {
+            setPreviousState({ size: { ...size }, position: { ...position } });
+            setSize({ width: window.innerWidth, height: window.innerHeight - 70 });
+            setPosition({ x: 0, y: 0 });
+        } else if (app.state === 'open') {
+            setSize(previousState.size);
+            setPosition(previousState.position);
+        }
+    }, [app.state]);
+
+    const getAnimationProps = () => {
+        const startX = window.innerWidth / 2 - size.width / 2;
+        const common = { initial: { opacity: 0, scale: 0.8, y: window.innerHeight, x: startX }, animate: { opacity: 1, scale: 1, y: position.y, x: position.x }, exit: { opacity: 0, scale: 0.9, y: window.innerHeight } };
+        if (['opening', 'closing', 'maximized'].includes(app.state)) return common;
+        return { initial: { opacity: 1, scale: 1 }, animate: { opacity: 1, scale: 1, x: position.x, y: position.y, width: size.width, height: size.height }, exit: { opacity: 0, scale: 0.95 } };
+    };
+
+    if (app.state === 'minimized') return null;
+
+    return (
+        <AnimatePresence>
+            <motion.div
+                key={app.instanceId}
+                drag dragListener={false} dragControls={dragControls} dragElastic={0} dragMomentum={false} dragConstraints={frameConstraints}
+                onDrag={(e, info) => { setPosition({ x: info.point.x, y: info.point.y }); }}
+                {...getAnimationProps()}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                style={{
+                    zIndex: app.zIndex, position: 'absolute',
+                    left: app.state === 'maximized' ? 0 : position.x, top: app.state === 'maximized' ? 0 : position.y,
+                    width: app.state === 'maximized' ? '100vw' : size.width, height: app.state === 'maximized' ? `calc(100vh - 65px)` : size.height
+                }}
+                onMouseDown={() => onFocus(app.instanceId)}
+                className="bg-white/80 backdrop-blur-2xl rounded-xl shadow-2xl flex flex-col overflow-hidden window-app border border-white/20"
+            >
+                {!app.windowOptions?.hideTitleBar && (
+                    <div
+                        onPointerDown={(e) => {
+                            const now = Date.now();
+                            if (now - lastClickTime < 300) { onMaximize(app.instanceId); return; }
+                            setLastClickTime(now);
+                            if (app.state !== 'maximized') dragControls.start(e);
+                        }}
+                        className="title-bar flex items-center justify-between h-10 bg-white/40 px-3 border-b border-white/30 flex-shrink-0 cursor-move"
+                    >
+                        <div className="flex items-center gap-2 pointer-events-none">
+                            <img src={app.icon} alt={app.name} className="w-5 h-5" />
+                            <p className="font-semibold text-xs text-gray-800">{app.name}</p>
+                        </div>
+                        <div className="flex items-center gap-2 pointer-events-auto">
+                            <div onClick={(e) => { e.stopPropagation(); onMinimize(app.instanceId); }} className="w-3.5 h-3.5 bg-yellow-400 rounded-full hover:bg-yellow-500 cursor-pointer" />
+                            <div onClick={(e) => { e.stopPropagation(); onMaximize(app.instanceId); }} className="w-3.5 h-3.5 bg-green-500 rounded-full hover:bg-green-600 cursor-pointer" />
+                            <div onClick={(e) => { e.stopPropagation(); onClose(app.instanceId); }} className="w-3.5 h-3.5 bg-red-500 rounded-full hover:bg-red-600 cursor-pointer" />
+                        </div>
+                    </div>
+                )}
+                <div className="flex-grow overflow-hidden bg-white/50">{children}</div>
+                {app.state !== 'maximized' && (
+                    <motion.div onPan={(_e, info) => setSize(p => ({ width: Math.max(300, p.width + info.delta.x), height: Math.max(200, p.height + info.delta.y) }))} className="absolute bottom-0 right-0 w-4 h-4 cursor-se-resize z-10" />
+                )}
+            </motion.div>
+        </AnimatePresence>
+    );
+}, (prev, next) => prev.app.state === next.app.state && prev.app.zIndex === next.app.zIndex && prev.app.instanceId === next.app.instanceId);
+
+// Memoized Desktop Icon
+const DesktopIcon = React.memo<{ icon: MyApp; isSelected: boolean; onMouseDown: (e: React.MouseEvent<HTMLDivElement>, id: string) => void }>(({ icon, isSelected, onMouseDown }) => (
+    <div
+        className={`absolute flex flex-col items-center justify-start gap-1 p-2 rounded-lg transition-colors duration-100 ${isSelected ? 'bg-white/30 border border-white/40' : 'hover:bg-white/20 border border-transparent'} -z-0 cursor-default`}
+        style={{ left: icon.x, top: icon.y, width: ICON_WIDTH, height: ICON_HEIGHT }}
+        onMouseDown={(e) => onMouseDown(e, icon.id)}>
+        <img src={icon.icon} alt={icon.name} className="w-10 h-10 object-center pointer-events-none drop-shadow-md" />
+        <p className="text-white text-xs text-center pointer-events-none drop-shadow-md break-words w-full leading-tight line-clamp-2">{icon.name}</p>
+    </div>
+));
+
+// Taskbar Clock - Decoupled to prevent main app re-renders
+const TaskbarClock = React.memo<{ onClick: () => void }>(({ onClick }) => {
+    const [shortTime, setShortTime] = useState("");
+    const [shortDate, setShortDate] = useState("");
+    useEffect(() => {
+        const update = () => {
+            const now = new Date();
+            setShortTime(now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }));
+            setShortDate(now.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+        };
+        update();
+        const t = setInterval(update, 1000);
+        return () => clearInterval(t);
+    }, []);
+    return (
+        <div onClick={onClick} className="flex flex-col items-center justify-center px-3 py-1 hover:bg-white/10 rounded-md cursor-default text-white">
+            <span className="text-xs font-medium">{shortTime}</span>
+            <span className="text-[10px] opacity-80">{shortDate}</span>
+        </div>
+    );
+});
+
+// StiyaBot Chat UI
+const StiyaBot = ({ isOpen, isOpened }: { isOpen: () => void; isOpened: boolean }) => {
+    const [messages, setMessages] = useState<{ text: string; sender: 'user' | 'bot' }[]>([{ text: "Hi! I'm Stiya. Say 'Hey Stiya' or type below.", sender: 'bot' }]);
+    const [input, setInput] = useState("");
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const appManager = useAppManager();
+
+    useEffect(() => {
+        if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    }, [messages, isOpened]);
+
+    const handleSend = () => {
+        if (!input.trim()) return;
+        setMessages(p => [...p, { text: input, sender: 'user' }]);
+        
+        const text = input.toLowerCase();
+        setInput("");
+        
+        setTimeout(() => {
+            if (text.includes("open task manager")) {
+                appManager.openApp("taskmanager");
+                setMessages(p => [...p, { text: "Opening Task Manager.", sender: 'bot' }]);
+            } else if (text.includes("open chrome")) {
+                appManager.openApp("chrome");
+                setMessages(p => [...p, { text: "Opening Chrome.", sender: 'bot' }]);
+            } else {
+                setMessages(p => [...p, { text: "I'm a local AI assistant mock. Try saying 'Open Task Manager'.", sender: 'bot' }]);
+            }
+        }, 600);
+    };
+
+    return (
+        <AnimatePresence>
+            {isOpened && (
+                <motion.div initial={{ opacity: 0, y: 50, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 50, scale: 0.9 }} transition={{ duration: 0.2 }}
+                    className="absolute left-6 bottom-20 w-96 h-[500px] bg-white/95 backdrop-blur-3xl rounded-3xl shadow-2xl flex flex-col overflow-hidden z-[50000] border border-gray-200">
+                    <div className="flex items-center justify-between p-4 border-b border-gray-200/50 bg-gray-50/50">
+                        <div className="flex items-center gap-3">
+                            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center text-white"><StarFourIcon size={16} /></div>
+                            <span className="font-semibold text-gray-800">Stiya AI</span>
+                        </div>
+                        <button onClick={isOpen} className="p-2 hover:bg-gray-200 rounded-full transition"><XIcon size={16} /></button>
+                    </div>
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
+                        {messages.map((m, i) => (
+                            <div key={i} className={`max-w-[80%] p-3 rounded-2xl text-sm ${m.sender === 'user' ? 'bg-indigo-600 text-white self-end rounded-br-sm' : 'bg-gray-100 text-gray-800 self-start rounded-bl-sm'}`}>
+                                {m.text}
+                            </div>
+                        ))}
+                    </div>
+                    <div className="p-4 border-t border-gray-200 bg-white">
+                        <div className="flex items-center gap-2 bg-gray-100 rounded-full p-1 pl-4">
+                            <input type="text" value={input} onKeyDown={e => e.key === 'Enter' && handleSend()} onChange={e => setInput(e.target.value)} placeholder="Message Stiya..." className="flex-1 bg-transparent outline-none text-sm" />
+                            <button onClick={handleSend} className="p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition"><CaretRightIcon size={18} /></button>
+                        </div>
+                    </div>
+                </motion.div>
+            )}
+        </AnimatePresence>
+    );
+};
+
+// --- Main Desktop Application ---
+
+export default function DesktopPage() {
+    const [openWindows, setOpenWindows] = useState<DesktopAppInstance[]>([]);
+    const [icons, setIcons] = useState<MyApp[]>([]);
+    const [taskbarIcons, setTaskbarIcons] = useState<MyApp[]>([]);
+    const [selectedIcons, setSelectedIcons] = useState<Set<string>>(new Set());
+    const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
+    const [zIndexCounter, setZIndexCounter] = useState<number>(10);
+    const [focusedWindow, setFocusedWindow] = useState<string>("desktop");
+
+    // UI Panels
+    const [isBotOpen, setIsBotOpen] = useState(false);
+    const [isStartMenuOpen, setStartMenuOpen] = useState(false);
+    const [batteryStatus, setBatteryStatus] = useState<BatteryStatus>({ level: 100, charging: false });
+
+    const desktopRef = useRef<HTMLDivElement>(null);
+    const draggingIconInfo = useRef<any>(null);
+
+    // Initial arrangement
+    useEffect(() => {
+        let currentX = ICON_PADDING_X;
+        let currentY = TOP_MARGIN;
+        const screenHeight = window.innerHeight - 60; // Approximate taskbar height
+
+        const initialIcons = Object.values(desktopAppRegistry).map(app => {
+            if (currentY + ICON_HEIGHT > screenHeight) { currentY = TOP_MARGIN; currentX += GRID_SIZE_X; }
+            const icon = { ...app, x: currentX, y: currentY };
+            currentY += GRID_SIZE_Y;
+            return icon;
+        });
+
+        setIcons(initialIcons);
+        setTaskbarIcons(Object.values(taskBarAppsRegistry).map(app => ({ ...app, x: 0, y: 0 })));
+    }, []);
+
+    // Voice Recognition ("Hey Stiya")
+    useEffect(() => {
+        const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        if (!SpeechRecognition) return;
+
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = false;
+        
+        recognition.onresult = (event: any) => {
+            const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase();
+            if (transcript.includes("hey stiya") || transcript.includes("hi stiya")) {
+                setIsBotOpen(true);
+            }
+        };
+
+        recognition.onend = () => {
+            try { recognition.start(); } catch (e) {} // Restart silently if it stops
+        };
+
+        try { recognition.start(); } catch (e) { console.warn("Mic access denied or error starting."); }
+        return () => { recognition.onend = null; recognition.stop(); };
+    }, []);
+
+    // API Context Implementations
+    const getRunningInstances = useCallback((appId: string) => openWindows.filter(w => w.id === appId && w.state !== "closing"), [openWindows]);
+
+    const getAppDefinition = (appId: string): AppDefinition | undefined => allApps[appId as keyof typeof allApps];
+    
+    const handleFocusWindow = useCallback((instanceId: string) => {
+        setZIndexCounter(z => z + 1);
+        setFocusedWindow("window");
+        setOpenWindows(prev => prev.map(w => w.instanceId === instanceId ? { ...w, zIndex: zIndexCounter + 1, state: w.state === "minimized" ? "open" : w.state } : w).sort((a, b) => a.zIndex - b.zIndex));
+    }, [zIndexCounter]);
+
+    const handleCloseWindow = useCallback((instanceId: string) => {
+        setOpenWindows(prev => prev.map(w => w.instanceId === instanceId ? { ...w, state: "closing" } : w));
+        setTimeout(() => setOpenWindows(prev => prev.filter(w => w.instanceId !== instanceId)), 200);
+    }, []);
+
+    const createNewAppInstance = useCallback((appId: string, appDef: AppDefinition) => {
+        setZIndexCounter(z => z + 1);
+        const x = (window.innerWidth - appDef.defaultSize.width) / 2 + (openWindows.length * WINDOW_CASCADE_OFFSET) % 200;
+        const y = (window.innerHeight - appDef.defaultSize.height) / 2 + (openWindows.length * WINDOW_CASCADE_OFFSET) % 200;
+
+        const newWindow: DesktopAppInstance = { ...appDef, instanceId: `${appId}-${Date.now()}`, x, y, zIndex: zIndexCounter + 1, state: "opening" };
+        setOpenWindows(prev => [...prev, newWindow]);
+        setTimeout(() => setOpenWindows(prev => prev.map(w => w.instanceId === newWindow.instanceId ? { ...w, state: "open" } : w)), 200);
+    }, [openWindows.length, zIndexCounter]);
+
+    const handleOpenApp = useCallback((appId: string) => {
+        const appDef = getAppDefinition(appId);
+        if (!appDef) return;
+        const running = getRunningInstances(appId);
+        if (running.length === 0) createNewAppInstance(appId, appDef);
+        else handleFocusWindow(running[running.length - 1].instanceId); // Focus top-most if already running
+    }, [getRunningInstances, createNewAppInstance, handleFocusWindow]);
+
+    const appManagerValue: AppManagerAPI = {
+        openApp: handleOpenApp,
+        createAppInstance: appId => { const appDef = getAppDefinition(appId); if (appDef) createNewAppInstance(appId, appDef); },
+        closeInstance: handleCloseWindow,
+        closeAllInstancesOfApp: appId => setOpenWindows(p => p.filter(w => w.id !== appId)),
+        getRunningInstances: getRunningInstances as any,
+        focusInstance: handleFocusWindow
+    };
+
+    // Desktop Interactions
+    const handleDesktopMouseDown = (e: React.MouseEvent) => {
+        if ((e.target as HTMLElement).closest(".window-app, .taskbar")) return;
+        setSelectedIcons(new Set());
+        setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
+
+        const onMove = (me: MouseEvent) => {
+            const w = me.clientX - e.clientX;
+            const h = me.clientY - e.clientY;
+            setSelectionBox({ x: w > 0 ? e.clientX : me.clientX, y: h > 0 ? e.clientY : me.clientY, width: Math.abs(w), height: Math.abs(h) });
+        };
+        const onUp = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); setSelectionBox(null); };
+        document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp);
+    };
+
+    const handleIconMouseDown = useCallback((e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        if (e.detail === 2) { handleOpenApp(id); return; }
+        
+        const newSel = (e.ctrlKey || e.metaKey) ? new Set(selectedIcons) : new Set([id]);
+        if (e.ctrlKey || e.metaKey) newSel.has(id) ? newSel.delete(id) : newSel.add(id);
+        setSelectedIcons(newSel);
+
+        const initialPos = icons.reduce((acc: any, icon) => { if (newSel.has(icon.id)) acc[icon.id] = { x: icon.x, y: icon.y }; return acc; }, {});
+        draggingIconInfo.current = { startX: e.clientX, startY: e.clientY, initialPos, selection: newSel };
+
+        const onMove = (me: MouseEvent) => {
+            const dx = me.clientX - draggingIconInfo.current.startX;
+            const dy = me.clientY - draggingIconInfo.current.startY;
+            setIcons(prev => prev.map(icon => newSel.has(icon.id) ? { ...icon, x: initialPos[icon.id].x + dx, y: initialPos[icon.id].y + dy } : icon));
+        };
+        const onUp = () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseup", onUp); };
+        document.addEventListener("mousemove", onMove); document.addEventListener("mouseup", onUp);
+    }, [handleOpenApp, icons, selectedIcons]);
+
+    // Derived Taskbar active icons logic
+    const activeTaskbarApps = Array.from(new Set([...taskbarIcons.map(t => t.id), ...openWindows.map(w => w.id)]));
+
+    return (
+        <AppManagerProvider value={appManagerValue}>
+            <div className="w-screen h-screen overflow-hidden bg-black font-sans text-sm selection:bg-blue-500/30">
+                {/* Background */}
+                <img src={WALLPAPER} className="w-full h-full object-cover absolute inset-0 z-0 pointer-events-none opacity-90" alt="bg" />
+
+                {/* Desktop Surface */}
+                <div ref={desktopRef} onMouseDown={handleDesktopMouseDown} className="absolute inset-0 z-10 overflow-hidden outline-none" tabIndex={0}>
+                    {/* Render Desktop Icons */}
+                    {icons.map(icon => (
+                        <DesktopIcon key={icon.id} icon={icon} isSelected={selectedIcons.has(icon.id)} onMouseDown={handleIconMouseDown} />
+                    ))}
+
+                    {/* Selection Box */}
+                    {selectionBox && (
+                        <div className="absolute bg-blue-500/20 border border-blue-400/50 pointer-events-none" 
+                             style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />
+                    )}
+
+                    {/* Render Windows */}
+                    {openWindows.map(app => (
+                        <Window key={app.instanceId} app={app} onClose={handleCloseWindow} onFocus={handleFocusWindow} 
+                            onMinimize={id => setOpenWindows(p => p.map(w => w.instanceId === id ? { ...w, state: 'minimized' } : w))}
+                            onMaximize={id => setOpenWindows(p => p.map(w => w.instanceId === id ? { ...w, state: w.state === 'maximized' ? 'open' : 'maximized' } : w))}
+                            frameConstraints={desktopRef}>
+                            {app.component}
+                        </Window>
+                    ))}
+                </div>
+
+                {/* Overlays / OS Panels */}
+                <StiyaBot isOpen={() => setIsBotOpen(!isBotOpen)} isOpened={isBotOpen} />
+
+                {/* Taskbar */}
+                <div className="taskbar absolute bottom-2 left-1/2 -translate-x-1/2 h-14 bg-white/20 backdrop-blur-2xl border border-white/20 rounded-2xl shadow-2xl z-[60000] px-3 flex items-center gap-2">
+                    {/* Start Button */}
+                    <button onClick={() => setStartMenuOpen(!isStartMenuOpen)} className="w-10 h-10 bg-white/10 hover:bg-white/20 rounded-xl flex items-center justify-center transition-all">
+                        <div className="w-4 h-4 grid grid-cols-2 gap-0.5"><div className="bg-white rounded-sm"/><div className="bg-white rounded-sm"/><div className="bg-white rounded-sm"/><div className="bg-white rounded-sm"/></div>
+                    </button>
+                    
+                    {/* AI Search/Bot Trigger */}
+                    <button onClick={() => setIsBotOpen(!isBotOpen)} className="flex items-center gap-2 bg-white/10 hover:bg-white/20 px-3 py-2 rounded-xl text-white/80 hover:text-white transition-all w-48 text-left border border-white/10">
+                        <StarFourIcon size={16} /> <span className="flex-1 text-xs truncate">Ask Stiya AI...</span> <MicrophoneIcon size={14} />
+                    </button>
+
+                    <div className="w-px h-6 bg-white/20 mx-1" />
+
+                    {/* App Icons */}
+                    <div className="flex items-center gap-1">
+                        {activeTaskbarApps.map(id => {
+                            const app = (allApps as Record<string, AppDefinition>)[id];
+                            
+                            if (!app) return null;
+
+                            const isRunning = getRunningInstances(id).length > 0;
+                            const isActive = isRunning && getRunningInstances(id).some(i => i.zIndex === zIndexCounter);
+
+                            return (
+                                <button key={id} onClick={() => handleOpenApp(id)} className={`relative w-10 h-10 p-1.5 rounded-xl hover:bg-white/15 transition-all flex items-center justify-center ${isActive ? 'bg-white/20 shadow-inner border border-white/10' : ''}`}>
+                                    <img src={app.icon} alt={app.name} className="w-full h-full object-contain filter drop-shadow-sm transition-transform active:scale-90" />
+                                    {isRunning && <div className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-3 h-1 rounded-t-full transition-colors ${isActive ? 'bg-blue-400' : 'bg-white/60'}`} />}
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    <div className="w-px h-6 bg-white/20 mx-1" />
+
+                    {/* System Tray */}
+                    <div className="flex items-center gap-1">
+                        <button className="flex items-center gap-2 px-2 py-1.5 hover:bg-white/15 rounded-xl transition-all">
+                            <WifiHighIcon size={16} className="text-white" />
+                            <SpeakerHighIcon size={16} className="text-white" />
+                            <BatteryIcon {...batteryStatus} />
+                        </button>
+                        <TaskbarClock onClick={() => {}} />
+                    </div>
+                </div>
+            </div>
+        </AppManagerProvider>
+    );
+}

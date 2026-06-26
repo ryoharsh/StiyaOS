@@ -1,0 +1,191 @@
+@import "tailwindcss";
+@tailwind utilities;
+
+/* Regular */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+}
+
+/* Italic */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_italic.ttf") format("truetype");
+    font-weight: 400;
+    font-style: italic;
+}
+
+/* Medium */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_medium.ttf") format("truetype");
+    font-weight: 500;
+    font-style: normal;
+}
+
+/* Medium Italic */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_medium_italic.ttf") format("truetype");
+    font-weight: 500;
+    font-style: italic;
+}
+
+/* Semi Bold */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_semi_bold.ttf") format("truetype");
+    font-weight: 600;
+    font-style: normal;
+}
+
+/* Semi Bold Italic */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_semi_bold_italic.ttf") format("truetype");
+    font-weight: 600;
+    font-style: italic;
+}
+
+/* Bold */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+}
+
+/* Bold Italic */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_bold_italic.ttf") format("truetype");
+    font-weight: 700;
+    font-style: italic;
+}
+
+/* Extra Bold */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_extra_bold.ttf") format("truetype");
+    font-weight: 800;
+    font-style: normal;
+}
+
+/* Black */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_black.ttf") format("truetype");
+    font-weight: 900;
+    font-style: normal;
+}
+
+/* Black Italic */
+@font-face {
+    font-family: 'Elms Sans';
+    src: url("./fonts/elms_sans_black_italic.ttf") format("truetype");
+    font-weight: 900;
+    font-style: italic;
+}
+
+@theme {
+    --background-color: #FF0F27;
+}
+
+@theme dark {
+    --background-color: #121212;
+}
+
+body {
+    margin: 0;
+    background-color: var(--background-color);
+    font-family: 'Elms Sans', sans-serif;
+    user-select: none;
+    -moz-user-select: none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+}
+
+.hidesb {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.hidesb::-webkit-scrollbar {
+    display: none;
+}
+
+.fade-text {
+    opacity: 0;
+    animation-name: fadeInUp;
+    animation-duration: 500ms;
+    animation-timing-function: ease-out;
+    animation-fill-mode: forwards;
+    animation-delay: 200ms;
+}
+
+.fade-img {
+    opacity: 0;
+    animation-name: fadeInUp;
+    animation-duration: 500ms;
+    animation-timing-function: ease-out;
+    animation-fill-mode: forwards;
+}
+
+@keyframes fadeInUp {
+    0% {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    100% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@layer utilities {
+  /* 🪟 Windows 11 Entering Animation Configuration */
+  .win11-open {
+    animation: win11SlideIn 0.30s cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+    pointer-events: auto;
+  }
+
+  /* 🪟 Windows 11 Exiting/Closing Animation Configuration */
+  .win11-close {
+    animation: win11SlideOut 0.20s cubic-bezier(0.4, 0, 1, 1) forwards;
+    pointer-events: none;
+  }
+}
+
+/* --- Core Keyframe Sequences Matrix --- */
+@keyframes win11SlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem) scale(0.975); /* Starts slightly deeper from bottom-4 and scaled down */
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes win11SlideOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(1.5rem) scale(0.975); /* Drops right back seamlessly to the bottom-4 track */
+  }
+}
+
+.liquid-ether-container {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
