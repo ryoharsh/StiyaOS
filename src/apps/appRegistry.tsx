@@ -65,7 +65,7 @@ export const appRegistry = {
         component: <AboutDev />
     },
     chrome: {
-        id: "browser",
+        id: "chrome",
         name: "Browser",
         defaultSize: { width: 1200, height: 700 },
         icon: BROWSER,

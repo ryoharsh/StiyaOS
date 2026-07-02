@@ -10,9 +10,9 @@ export interface ChatMessage {
     };
 }
 
-localforage.config({ name: "ChatHistoryDBBB" });
+localforage.config({ name: "ChatHistoryDB" });
 
-const CHAT_HISTORY_KEY = "chatHistoryyy";
+const CHAT_HISTORY_KEY = "chatHistory";
 
 // Define the Zustand store state type
 interface ChatState {

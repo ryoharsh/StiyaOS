@@ -44,7 +44,7 @@ export const useSetupStore = create<SetupStore>()(
         }),
     }),
     {
-      name: 'stiya-setup-dat',
+      name: 'stiya-setup-data',
     }
   )
 );
